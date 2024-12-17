@@ -6,5 +6,4 @@ export const emails = sqliteTable("emails", {
   sender: text("sender").notNull(),
   subject: text("subject"),
   timestamp: integer("timestamp").notNull(),
-  processed: integer("processed", { mode: "boolean" }).default(false),
 });

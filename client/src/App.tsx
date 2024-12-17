@@ -10,6 +10,9 @@ export default function App() {
     // ideally we should use a library to fetch things as mutating and revalidating things can be easier
     const response = await fetch("http://localhost:3000/emails");
     const data = await response.json();
+    if (!response.ok) {
+      throw new Error("Failed to fetch emails");
+    }
     setEmails(data);
   };
 

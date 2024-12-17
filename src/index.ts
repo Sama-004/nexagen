@@ -42,7 +42,9 @@ function processEmail(stream: any): Promise<boolean> {
 
         if (existingEmail) {
           console.log(
-            `Email with messageId ${parsed.messageId} already exists in database`
+            `[${new Date().toISOString()}] Skip: Email with messageId ${
+              parsed.messageId
+            } already exists in database`
           );
           resolve(false);
           return;
@@ -54,6 +56,12 @@ function processEmail(stream: any): Promise<boolean> {
           timestamp: parsed.date?.getTime() || new Date().getTime(),
           messageId: parsed.messageId || "",
         });
+        console.log(
+          `[${new Date().toISOString()}] Processed: Email from "${
+            parsed.from?.text
+          }" with subject "${parsed.subject}"`
+        );
+
         resolve(true);
       } catch (error) {
         console.error("Error processing email:", error);
@@ -66,6 +74,8 @@ function processEmail(stream: any): Promise<boolean> {
 function fetchEmails() {
   return new Promise((resolve, reject) => {
     let processedCount = 0;
+    const startTime = new Date().toISOString();
+    console.log(`[${startTime}] Starting email fetch process...`);
     imap.once("ready", () => {
       imap.openBox("INBOX", false, async (err, box) => {
         if (err) {
@@ -93,6 +103,12 @@ function fetchEmails() {
             return;
           }
 
+          console.log(
+            `[${new Date().toISOString()}] Found ${
+              results.length
+            } unread emails`
+          );
+
           const fetch = imap.fetch(results, { bodies: "", markSeen: false });
           const promises: Promise<any>[] = [];
 
@@ -106,13 +122,12 @@ function fetchEmails() {
                       imap.setFlags(results, ["\\Seen"], (err) => {
                         if (err) {
                           console.error(
-                            `Error marking message ${seqno} as read:`,
+                            `[${new Date().toISOString()}] Error marking message ${seqno} as read:`,
                             err
                           );
                           flagReject(err);
                         } else {
                           processedCount++;
-                          console.log(`Message ${seqno} marked as read`);
                           flagResolve();
                         }
                       });
@@ -120,7 +135,10 @@ function fetchEmails() {
                   }
                   messageResolve(processed);
                 } catch (error) {
-                  console.error("Error processing email:", error);
+                  console.error(
+                    `[${new Date().toISOString()}] Error processing email:`,
+                    error
+                  );
                   messageResolve(false);
                 }
               });
@@ -129,18 +147,25 @@ function fetchEmails() {
           });
 
           fetch.once("error", (err) => {
+            console.error(`[${new Date().toISOString()}] Fetch error:`, err);
             reject(err);
           });
 
           fetch.once("end", () => {
             Promise.all(promises)
               .then(() => {
-                console.log(`Processed ${processedCount} emails`);
+                const endTime = new Date().toISOString();
+                console.log(
+                  `[${endTime}] Email fetch process completed. Processed ${processedCount} emails`
+                );
                 imap.end();
                 resolve(processedCount);
               })
               .catch((err) => {
-                console.error("Error processing emails:", err);
+                console.error(
+                  `[${new Date().toISOString()}] Error processing emails:`,
+                  err
+                );
                 imap.end();
                 reject(err);
               });
@@ -154,11 +179,15 @@ function fetchEmails() {
     });
 
     imap.once("error", (err) => {
+      console.error(
+        `[${new Date().toISOString()}] IMAP connection error:`,
+        err
+      );
       reject(err);
     });
 
     imap.once("end", () => {
-      console.log("IMAP connection ended");
+      console.log(`[${new Date().toISOString()}] IMAP connection ended`);
     });
 
     imap.connect();
