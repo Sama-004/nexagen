@@ -97,7 +97,7 @@ function fetchEmails() {
           );
 
           if (!results.length) {
-            console.log("No unread emails");
+            console.log(`[${new Date().toISOString()}] No unread emails`);
             imap.end();
             resolve(0);
             return;
