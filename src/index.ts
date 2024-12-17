@@ -5,6 +5,7 @@ import { simpleParser } from "mailparser";
 import Imap from "node-imap";
 import dotenv from "dotenv";
 import cors from "cors";
+import { eq } from "drizzle-orm";
 
 dotenv.config();
 
@@ -24,7 +25,7 @@ const imapConfig = {
 
 const imap = new Imap(imapConfig);
 
-function processEmail(stream: any) {
+function processEmail(stream: any): Promise<boolean> {
   return new Promise((resolve, reject) => {
     simpleParser(stream, async (err, parsed) => {
       if (err) {
@@ -33,14 +34,29 @@ function processEmail(stream: any) {
       }
 
       try {
+        const existingEmail = await db
+          .select()
+          .from(emails)
+          .where(eq(emails.messageId, parsed.messageId || ""))
+          .get();
+
+        if (existingEmail) {
+          console.log(
+            `Email with messageId ${parsed.messageId} already exists in database`
+          );
+          resolve(false);
+          return;
+        }
+
         await db.insert(emails).values({
           sender: parsed.from?.text || "",
           subject: parsed.subject || "",
           timestamp: parsed.date?.getTime() || new Date().getTime(),
           messageId: parsed.messageId || "",
         });
-        resolve(parsed);
+        resolve(true);
       } catch (error) {
+        console.error("Error processing email:", error);
         reject(error);
       }
     });
@@ -49,32 +65,64 @@ function processEmail(stream: any) {
 
 function fetchEmails() {
   return new Promise((resolve, reject) => {
+    let processedCount = 0;
     imap.once("ready", () => {
-      imap.openBox("INBOX", false, (err, box) => {
+      imap.openBox("INBOX", false, async (err, box) => {
         if (err) {
           reject(err);
           return;
         }
 
-        imap.search(["UNSEEN", ["SINCE", "Dec 15 2024"]], (err, results) => {
-          if (err) {
-            reject(err);
-            return;
-          }
+        try {
+          const results = await new Promise<number[]>(
+            (searchResolve, searchReject) => {
+              imap.search(
+                ["UNSEEN", ["SINCE", "Dec 15 2024"]],
+                (err, results) => {
+                  if (err) searchReject(err);
+                  else searchResolve(results);
+                }
+              );
+            }
+          );
 
           if (!results.length) {
             console.log("No unread emails");
-            resolve([]);
+            imap.end();
+            resolve(0);
             return;
           }
 
-          const fetch = imap.fetch(results, { bodies: "" });
+          const fetch = imap.fetch(results, { bodies: "", markSeen: false });
           const promises: Promise<any>[] = [];
 
-          fetch.on("message", (msg) => {
-            const promise = new Promise((resolve) => {
-              msg.on("body", (stream) => {
-                processEmail(stream).then(resolve).catch(console.error);
+          fetch.on("message", (msg, seqno) => {
+            const promise = new Promise<boolean>((messageResolve) => {
+              msg.on("body", async (stream) => {
+                try {
+                  const processed = await processEmail(stream);
+                  if (processed) {
+                    await new Promise<void>((flagResolve, flagReject) => {
+                      imap.setFlags(results, ["\\Seen"], (err) => {
+                        if (err) {
+                          console.error(
+                            `Error marking message ${seqno} as read:`,
+                            err
+                          );
+                          flagReject(err);
+                        } else {
+                          processedCount++;
+                          console.log(`Message ${seqno} marked as read`);
+                          flagResolve();
+                        }
+                      });
+                    });
+                  }
+                  messageResolve(processed);
+                } catch (error) {
+                  console.error("Error processing email:", error);
+                  messageResolve(false);
+                }
               });
             });
             promises.push(promise);
@@ -85,14 +133,32 @@ function fetchEmails() {
           });
 
           fetch.once("end", () => {
-            Promise.all(promises).then(resolve).catch(reject);
+            Promise.all(promises)
+              .then(() => {
+                console.log(`Processed ${processedCount} emails`);
+                imap.end();
+                resolve(processedCount);
+              })
+              .catch((err) => {
+                console.error("Error processing emails:", err);
+                imap.end();
+                reject(err);
+              });
           });
-        });
+        } catch (error) {
+          console.error("Error in fetch process:", error);
+          imap.end();
+          reject(error);
+        }
       });
     });
 
     imap.once("error", (err) => {
       reject(err);
+    });
+
+    imap.once("end", () => {
+      console.log("IMAP connection ended");
     });
 
     imap.connect();
